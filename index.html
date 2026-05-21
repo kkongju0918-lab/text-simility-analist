@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>Semantic Network Similarity Analyzer</title>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.26.0/cytoscape.min.js"></script>
+
+<style>
+
+body{
+    font-family:'Malgun Gothic',sans-serif;
+    background:#f8fafc;
+    margin:0;
+    padding:30px;
+    color:#1e293b;
+}
+
+h1{
+    text-align:center;
+    margin-bottom:10px;
+}
+
+p{
+    text-align:center;
+    color:#64748b;
+    margin-bottom:30px;
+}
+
+.container{
+    display:grid;
+    grid-template-columns:400px 1fr;
+    gap:25px;
+}
+
+.panel{
+    background:white;
+    border-radius:15px;
+    padding:20px;
+    box-shadow:0 4px 10px rgba(0,0,0,0.08);
+}
+
+.input-group{
+    margin-bottom:15px;
+}
+
+label{
+    font-weight:bold;
+    display:block;
+    margin-bottom:6px;
+}
+
+textarea{
+    width:100%;
+    height:100px;
+    resize:none;
+    border:1px solid #cbd5e1;
+    border-radius:8px;
+    padding:10px;
+    box-sizing:border-box;
+    font-size:14px;
+}
+
+button{
+    width:100%;
+    padding:14px;
+    border:none;
+    background:#10b981;
+    color:white;
+    font-size:16px;
+    border-radius:10px;
+    cursor:pointer;
+    font-weight:bold;
+    margin-top:10px;
+}
+
+button:hover{
+    background:#059669;
+}
+
+#cy{
+    width:100%;
+    height:500px;
+    border-radius:15px;
+    border:1px solid #e2e8f0;
+    background:white;
+}
+
+.result-box{
+    margin-top:20px;
+}
+
+table{
+    width:100%;
+    border-collapse:collapse;
+    table-layout:fixed;
+}
+
+th,td{
+    border-bottom:1px solid #e2e8f0;
+    padding:12px;
+    text-align:center;
+    word-break:break-word;
+}
+
+th{
+    background:#f1f5f9;
+}
+
+.highlight{
+    color:#10b981;
+    font-weight:bold;
+    font-size:17px;
+}
+
+</style>
+</head>
+
+<body>
+
+<h1>AI 텍스트 유사도 vs 네트워크 기반 의미 유사도</h1>
+
+<p>
+PageRank 기반 단어 네트워크를 활용하여 기존 코사인 유사도를 보완합니다.
+</p>
+
+<div class="container">
+
+<div class="panel">
+
+<div class="input-group">
+<label>영어 원문</label>
+<textarea id="text1">You are the salt of the earth.</textarea>
+</div>
+
+<button onclick="autoTranslate()">
+영어 자동 번역
+</button>
+
+<div class="input-group">
+<label>직역본 (자동 번역)</label>
+<textarea id="text2"></textarea>
+</div>
+
+<div class="input-group">
+<label>의역본</label>
+<textarea id="text3">너희는 세상에 꼭 필요한 존재다.</textarea>
+</div>
+
+<button onclick="analyzeTexts()">
+유사도 분석 시작
+</button>
+
+</div>
+
+<div>
+
+<div id="cy"></div>
+
+<div class="panel result-box">
+
+<h3>유사도 비교 결과</h3>
+
+<table>
+
+<thead>
+<tr>
+<th>비교 대상</th>
+<th>기존 코사인 유사도</th>
+<th>PageRank 보정 유사도</th>
+</tr>
+</thead>
+
+<tbody id="resultTable">
+
+<tr>
+<td colspan="3">
+분석 버튼을 눌러주세요.
+</td>
+</tr>
+
+</tbody>
+
+</table>
+
+</div>
+
+</div>
+
+</div>
+
+<script>
+
+const stopWords = [
+"is","are","the","of","a","an","and","to","in",
+"이","그","저","것","수","등","들","는","은","이","가"
+];
+
+async function autoTranslate(){
+
+    const originalText =
+        document.getElementById('text1').value;
+
+    try{
+
+        const response = await fetch(
+            'https://libretranslate.de/translate',
+            {
+                method:'POST',
+
+                headers:{
+                    'Content-Type':'application/json'
+                },
+
+                body:JSON.stringify({
+                    q:originalText,
+                    source:'en',
+                    target:'ko',
+                    format:'text'
+                })
+            }
+        );
+
+        const data = await response.json();
+
+        document.getElementById('text2').value =
+            data.translatedText;
+
+    }catch(error){
+
+        alert("번역 오류 발생");
+        console.log(error);
+
+    }
+}
+
+function normalizeWord(word){
+
+    return word
+        .replace(/[.,!?]/g,'')
+        .replace(/(이다|합니다|했다|한다|있는|하는)$/,'')
+        .replace(/(ing|ed|s)$/,'');
+
+}
+
+function preprocess(text){
+
+    return text
+        .toLowerCase()
+        .split(/\s+/)
+        .map(normalizeWord)
+        .filter(word =>
+            word.length > 1 &&
+            !stopWords.includes(word)
+        );
+}
+
+function createFrequencyVector(tokens){
+
+    let vec = {};
+
+    tokens.forEach(word=>{
+
+        vec[word]=(vec[word]||0)+1;
+
+    });
+
+    return vec;
+}
+
+function cosineSimilarity(vec1,vec2,allWords){
+
+    let dot=0;
+    let norm1=0;
+    let norm2=0;
+
+    allWords.forEach(word=>{
+
+        let a=vec1[word]||0;
+        let b=vec2[word]||0;
+
+        dot += a*b;
+        norm1 += a*a;
+        norm2 += b*b;
+
+    });
+
+    if(norm1===0 || norm2===0) return 0;
+
+    return dot / (Math.sqrt(norm1)*Math.sqrt(norm2));
+}
+
+function buildNetwork(tokens){
+
+    let connections={};
+    let scores={};
+
+    tokens.forEach(word=>{
+
+        connections[word]=new Set();
+        scores[word]=1;
+
+    });
+
+    for(let i=0;i<tokens.length-1;i++){
+
+        let a=tokens[i];
+        let b=tokens[i+1];
+
+        connections[a].add(b);
+        connections[b].add(a);
+
+    }
+
+    for(let step=0;step<20;step++){
+
+        let newScores={};
+
+        Object.keys(connections).forEach(word=>{
+
+            let sum=0;
+
+            connections[word].forEach(neighbor=>{
+
+                sum += scores[neighbor];
+
+            });
+
+            newScores[word]=0.15 + 0.85*sum;
+
+        });
+
+        scores=newScores;
+
+    }
+
+    return scores;
+}
+
+function weightedVector(tokens,pagerankScores){
+
+    let vec={};
+
+    tokens.forEach(word=>{
+
+        vec[word] =
+            (vec[word]||0) + pagerankScores[word];
+
+    });
+
+    return vec;
+}
+
+function analyzeTexts(){
+
+    const t1 =
+        preprocess(document.getElementById('text1').value);
+
+    const t2 =
+        preprocess(document.getElementById('text2').value);
+
+    const t3 =
+        preprocess(document.getElementById('text3').value);
+
+    const allWords = Array.from(
+        new Set([...t1,...t2,...t3])
+    );
+
+    // 기존 벡터
+
+    const vec1=createFrequencyVector(t1);
+    const vec2=createFrequencyVector(t2);
+    const vec3=createFrequencyVector(t3);
+
+    // 기존 코사인
+
+    const base12 =
+        cosineSimilarity(vec1,vec2,allWords);
+
+    const base13 =
+        cosineSimilarity(vec1,vec3,allWords);
+
+    const base23 =
+        cosineSimilarity(vec2,vec3,allWords);
+
+    // 네트워크 기반 PageRank
+
+    const pr1=buildNetwork(t1);
+    const pr2=buildNetwork(t2);
+    const pr3=buildNetwork(t3);
+
+    // 가중 벡터
+
+    const wvec1=weightedVector(t1,pr1);
+    const wvec2=weightedVector(t2,pr2);
+    const wvec3=weightedVector(t3,pr3);
+
+    // 보정 유사도
+
+    const new12 =
+        cosineSimilarity(wvec1,wvec2,allWords);
+
+    const new13 =
+        cosineSimilarity(wvec1,wvec3,allWords);
+
+    const new23 =
+        cosineSimilarity(wvec2,wvec3,allWords);
+
+    // 결과 출력
+
+    document.getElementById('resultTable').innerHTML = `
+
+    <tr>
+        <td>원문 ↔ 직역본</td>
+        <td>${(base12*100).toFixed(1)}%</td>
+        <td class="highlight">
+        ${(new12*100).toFixed(1)}%
+        </td>
+    </tr>
+
+    <tr>
+        <td>원문 ↔ 의역본</td>
+        <td>${(base13*100).toFixed(1)}%</td>
+        <td class="highlight">
+        ${(new13*100).toFixed(1)}%
+        </td>
+    </tr>
+
+    <tr>
+        <td>직역본 ↔ 의역본</td>
+        <td>${(base23*100).toFixed(1)}%</td>
+        <td class="highlight">
+        ${(new23*100).toFixed(1)}%
+        </td>
+    </tr>
+
+    `;
+
+    // 네트워크 그래프
+
+    let elements=[];
+
+    allWords.forEach(word=>{
+
+        let score =
+            (pr1[word]||0)+
+            (pr2[word]||0)+
+            (pr3[word]||0);
+
+        elements.push({
+
+            data:{
+                id:word,
+                weight:score
+            }
+
+        });
+
+    });
+
+    [t1,t2,t3].forEach(tokens=>{
+
+        for(let i=0;i<tokens.length-1;i++){
+
+            elements.push({
+
+                data:{
+                    source:tokens[i],
+                    target:tokens[i+1]
+                }
+
+            });
+
+        }
+
+    });
+
+    cytoscape({
+
+        container:document.getElementById('cy'),
+
+        elements:elements,
+
+        style:[
+
+            {
+                selector:'node',
+
+                style:{
+
+                    'label':'data(id)',
+
+                    'width':
+                    'mapData(weight,1,20,30,80)',
+
+                    'height':
+                    'mapData(weight,1,20,30,80)',
+
+                    'background-color':'#10b981',
+
+                    'text-valign':'center',
+
+                    'text-halign':'center',
+
+                    'font-size':'12px',
+
+                    'color':'#0f172a',
+
+                    'font-weight':'bold'
+                }
+            },
+
+            {
+                selector:'edge',
+
+                style:{
+
+                    'width':2,
+
+                    'line-color':'#cbd5e1',
+
+                    'curve-style':'bezier',
+
+                    'opacity':0.7
+                }
+            }
+
+        ],
+
+        layout:{
+            name:'cose',
+            padding:20
+        }
+
+    });
+
+}
+
+</script>
+
+</body>
+</html>
